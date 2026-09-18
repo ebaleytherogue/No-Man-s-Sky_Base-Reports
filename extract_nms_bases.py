@@ -626,6 +626,27 @@ def extract_base_object_positions(base):
         "object_timestamp_count": len(object_timestamps),
     }
 
+
+BASE_TYPE_LABELS = {
+    "HomePlanetBase": "Planetary Base",
+    "PlayerSpaceBase": "Orbital / Space Base",
+    "PlayerSpaceStationBase": "Space Station",
+    "PlayerShipBase": "Corvette / Ship Base",
+    "FreighterBase": "Freighter Base",
+}
+
+
+def extract_raw_base_type(base):
+    """Return the PersistentBaseTypes enum value from old or new save shapes."""
+    base_type = base.get("BaseType", "")
+    if isinstance(base_type, dict):
+        return str(base_type.get("PersistentBaseTypes", "")).strip()
+    return str(base_type).strip()
+
+
+def friendly_base_type(raw_base_type):
+    return BASE_TYPE_LABELS.get(raw_base_type, raw_base_type or "Unknown")
+
 def build_teleporter_lookup(data):
     lookup = defaultdict(list)
 
@@ -657,7 +678,7 @@ def build_teleporter_lookup(data):
     return lookup
 
 
-def choose_best_teleporter_candidate(persistent_name, reference_coordinates, candidates):
+def choose_best_teleporter_candidate(persistent_name, reference_coordinates, candidates, require_name_match=False):
     if not candidates:
         return None
 
@@ -669,6 +690,8 @@ def choose_best_teleporter_candidate(persistent_name, reference_coordinates, can
         candidate_name = normalize_name(candidate.get("teleporter_name", ""))
         exact_name_match = 1 if target_name and candidate_name == target_name else 0
         contains_name_match = 1 if target_name and candidate_name and (target_name in candidate_name or candidate_name in target_name) else 0
+        if require_name_match and not (exact_name_match or contains_name_match):
+            continue
         candidate_point = parse_coordinate_string(candidate.get("teleporter_coordinates", ""))
         distance = angular_distance(reference_point, candidate_point)
         scored.append((
@@ -681,8 +704,21 @@ def choose_best_teleporter_candidate(persistent_name, reference_coordinates, can
             candidate,
         ))
 
+    if not scored:
+        return None
+
     scored.sort(reverse=True)
     return scored[0][-1]
+
+
+def teleporter_name_matches(persistent_name, candidate):
+    target_name = normalize_name(persistent_name)
+    candidate_name = normalize_name(candidate.get("teleporter_name", ""))
+    return bool(
+        target_name
+        and candidate_name
+        and (target_name == candidate_name or target_name in candidate_name or candidate_name in target_name)
+    )
 
 
 def extract_base_rows(data):
@@ -697,6 +733,7 @@ def extract_base_rows(data):
             continue
 
         coords = extract_base_object_positions(base)
+        raw_base_type = extract_raw_base_type(base)
         persistent_name = str(base.get("Name", "")).strip()
         persistent_last_update_raw = base.get("LastUpdateTimestamp")
         persistent_last_update = format_timestamp_local(persistent_last_update_raw)
@@ -723,10 +760,20 @@ def extract_base_rows(data):
         )
 
         candidates = teleporter_lookup.get(key, [])
+        eligible_candidates = (
+            [candidate for candidate in candidates if teleporter_name_matches(persistent_name, candidate)]
+            if decoded["PlanetIndex"] == 0
+            else candidates
+        )
         chosen_candidate = choose_best_teleporter_candidate(
             persistent_name=persistent_name,
             reference_coordinates=reference_coordinates,
-            candidates=candidates,
+            candidates=eligible_candidates,
+            # Several Cosmos objects can share one system-level Planet-0
+            # address.  Only accept a name-related teleporter entry there so
+            # ships, freighters, orbital bases and stations cannot borrow one
+            # another's supplemental metadata.
+            require_name_match=decoded["PlanetIndex"] == 0,
         )
 
         reality_index = chosen_candidate.get("reality_index") if chosen_candidate else ""
@@ -746,6 +793,8 @@ def extract_base_rows(data):
         row = {
             "Teleporter Order": teleporter_order,
             "Base Name": persistent_name,
+            "Base Type": friendly_base_type(raw_base_type),
+            "Base Type (Raw)": raw_base_type,
             "Galaxy": galaxy_name_from_save_index(reality_index),
             "Galaxy Number (Save)": reality_index,
             "Galaxy Number (Human)": human_number_from_save_index(reality_index) if isinstance(reality_index, int) else "",
@@ -775,7 +824,7 @@ def extract_base_rows(data):
             "Context": context_key,
             "Owner UID": primary_owner_uid,
             "Owner Username": primary_owner_username,
-            "Teleporter Candidate Count": len(candidates),
+            "Teleporter Candidate Count": len(eligible_candidates),
             "Base Position Coordinates": base_position_coordinates,
             "First Object Coordinates": first_object_coordinates,
             "Object Count": coords["object_count"],
@@ -819,7 +868,7 @@ def annotate_notes(rows):
             notes.append("Featured")
         if row["Base Name"] and name_counts[row["Base Name"]] > 1:
             notes.append("Repeated base name")
-        if row["Planet"] == 0:
+        if row["Planet"] == 0 and row.get("Base Type (Raw)") == "HomePlanetBase":
             notes.append("PlanetIndex 0 (portal will error-correct to planet 1)")
         if not row.get("Teleporter Base Name"):
             notes.append("No teleporter match")
@@ -827,7 +876,7 @@ def annotate_notes(rows):
             notes.append("Teleporter name differed from persistent base name")
         if row.get("Teleporter Candidate Count", 0) > 1:
             notes.append(f"Multiple teleporter candidates ({row['Teleporter Candidate Count']})")
-        if not row.get("Computer Coordinates"):
+        if not row.get("Computer Coordinates") and row.get("Base Type (Raw)") == "HomePlanetBase":
             notes.append("No base computer object found")
         row["Notes"] = "; ".join(notes)
 
@@ -865,6 +914,7 @@ def build_grouped_rows(rows):
             "Galaxy": row["Galaxy"],
             "Galaxy Number (Human)": row["Galaxy Number (Human)"],
             "Base Name": row["Base Name"],
+            "Base Type": row["Base Type"],
             "Teleporter Coordinates": row["Teleporter Coordinates"],
             "Computer Coordinates": row["Computer Coordinates"],
             "Planet": row["Planet"],
@@ -1007,10 +1057,17 @@ def write_summary(rows, summary_path: Path, filtered_rows=None):
     repeated_name_count = sum(1 for _, count in by_name.items() if count > 1)
     favourite_count = sum(1 for row in rows if row["IsFavourite"])
     featured_count = sum(1 for row in rows if row["IsFeatured"])
-    planet_zero_count = sum(1 for row in rows if row["Planet"] == 0)
+    base_type_counts = Counter(row["Base Type"] for row in rows)
+    planetary_planet_zero_count = sum(
+        1 for row in rows
+        if row["Planet"] == 0 and row.get("Base Type (Raw)") == "HomePlanetBase"
+    )
     teleporter_match_count = sum(1 for row in rows if row["Teleporter Base Name"])
     unmatched_count = total_bases - teleporter_match_count
-    no_computer_count = sum(1 for row in rows if not row["Computer Coordinates"])
+    planetary_no_computer_count = sum(
+        1 for row in rows
+        if not row["Computer Coordinates"] and row.get("Base Type (Raw)") == "HomePlanetBase"
+    )
 
     with summary_path.open("w", encoding="utf-8") as f:
         f.write("No Man's Sky Base Extraction Summary\n")
@@ -1022,8 +1079,13 @@ def write_summary(rows, summary_path: Path, filtered_rows=None):
         f.write(f"Bases marked Favourite: {favourite_count}\n")
         f.write(f"Bases marked Featured: {featured_count}\n")
         f.write(f"Distinct repeated base names: {repeated_name_count}\n")
-        f.write(f"Bases with PlanetIndex 0: {planet_zero_count}\n")
-        f.write(f"Bases without base computer object: {no_computer_count}\n\n")
+        f.write(f"Planetary bases with PlanetIndex 0: {planetary_planet_zero_count}\n")
+        f.write(f"Planetary bases without base computer object: {planetary_no_computer_count}\n\n")
+
+        f.write("Counts by base type:\n")
+        for base_type, count in sorted(base_type_counts.items()):
+            f.write(f"  {base_type}: {count}\n")
+        f.write("\n")
 
         f.write("Counts by galaxy:\n")
         for save_num, galaxy_name, human_num in sorted(
@@ -1063,9 +1125,14 @@ def main():
 
     main_csv = output_dir / "nms_bases_master.csv"
     grouped_csv = output_dir / "nms_bases_grouped.csv"
-    dupes_csv = output_dir / "nms_bases_duplicate_names.csv"
     summary_txt = output_dir / "nms_bases_summary.txt"
-    filtered_csv = output_dir / "nms_bases_filtered_out.csv"
+
+    # These reports are no longer useful in normal operation. Remove stale
+    # copies from the selected output directory as well as ceasing generation.
+    for obsolete_name in ("nms_bases_duplicate_names.csv", "nms_bases_filtered_out.csv"):
+        obsolete_path = output_dir / obsolete_name
+        if obsolete_path.exists():
+            obsolete_path.unlink()
 
     data = load_json_with_backslash_fix(input_path)
 
@@ -1079,6 +1146,7 @@ def main():
     main_fieldnames = [
         "Teleporter Order",
         "Base Name",
+        "Base Type",
         "Galaxy",
         "Galaxy Number (Human)",
         "Galaxy Number (Save)",
@@ -1108,7 +1176,6 @@ def main():
         "Notes",
     ]
     write_csv(rows, main_csv, main_fieldnames)
-    write_csv(filtered_rows, filtered_csv, main_fieldnames)
 
     grouped_rows = build_grouped_rows(rows)
     grouped_fieldnames = [
@@ -1116,6 +1183,7 @@ def main():
         "Galaxy",
         "Galaxy Number (Human)",
         "Base Name",
+        "Base Type",
         "Teleporter Coordinates",
         "Computer Coordinates",
         "Planet",
@@ -1141,41 +1209,16 @@ def main():
     ]
     write_csv(grouped_rows, grouped_csv, grouped_fieldnames)
 
-    duplicate_rows = build_duplicate_rows(rows)
-    dupes_fieldnames = [
-        "Teleporter Order",
-        "Base Name",
-        "Occurrence",
-        "Total Occurrences",
-        "Galaxy",
-        "Galaxy Number (Human)",
-        "Galaxy Number (Save)",
-        "System (Coords)",
-        "Planet",
-        "Computer Coordinates",
-        "Teleporter Coordinates",
-        "Teleporter Base Name",
-        "Persistent Base Name",
-        "Persistent Match",
-        "Portal Hex (Grouped)",
-        "Glyph String (No Spaces)",
-        "Persistent Last Update Timestamp",
-        "Earliest Object Timestamp",
-        "Latest Object Timestamp",
-        "Base Computer Timestamp",
-        "Notes",
-    ]
-    write_csv(duplicate_rows, dupes_csv, dupes_fieldnames)
-
     write_summary(rows, summary_txt, filtered_rows)
 
-    repeated_groups = len({r["Base Name"] for r in duplicate_rows})
+    repeated_groups = sum(
+        1 for count in Counter(row["Base Name"] for row in rows if row["Base Name"]).values()
+        if count > 1
+    )
 
     print(f"Master CSV written:       {main_csv.resolve()}")
     print(f"Grouped CSV written:      {grouped_csv.resolve()}")
-    print(f"Duplicate report written: {dupes_csv.resolve()}")
     print(f"Summary written:          {summary_txt.resolve()}")
-    print(f"Filtered CSV written:     {filtered_csv.resolve()}")
     print(f"\nTotal report rows: {len(rows)}")
     print(f"Filtered-out rows: {len(filtered_rows)}")
     print(f"Repeated base-name groups: {repeated_groups}")
