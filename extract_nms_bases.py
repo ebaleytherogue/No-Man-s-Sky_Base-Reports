@@ -520,7 +520,7 @@ def iter_persistent_player_bases(data):
 
 def infer_primary_owner_uid(data):
     counts = Counter()
-    for _, base in iter_persistent_player_bases(data):
+    for _, _, base in iter_authoritative_persistent_bases(data):
         owner = base.get("Owner", {}) or {}
         uid = str(owner.get("UID", "")).strip()
         if uid:
@@ -533,7 +533,7 @@ def infer_primary_owner_uid(data):
 def infer_primary_owner_username(data):
     counts = Counter()
     primary_uid = infer_primary_owner_uid(data)
-    for _, base in iter_persistent_player_bases(data):
+    for _, _, base in iter_authoritative_persistent_bases(data):
         owner = base.get("Owner", {}) or {}
         if str(owner.get("UID", "")).strip() != primary_uid:
             continue
@@ -724,10 +724,24 @@ def teleporter_name_matches(persistent_name, candidate):
 def extract_base_rows(data):
     rows = []
     teleporter_lookup = build_teleporter_lookup(data)
+    # Infer the dominant identity from the authoritative BaseContext records;
+    # never embed one player's UID or username in this public script.
     primary_owner_uid = infer_primary_owner_uid(data)
     primary_owner_username = infer_primary_owner_username(data)
 
     for context_key, teleporter_order, base in iter_authoritative_persistent_bases(data):
+        owner = base.get("Owner") if isinstance(base.get("Owner"), dict) else {}
+        owner_uid = str(owner.get("UID", "")).strip()
+        owner_username = str(owner.get("USN", "")).strip()
+        # Require at least one known matching identifier. Any supplied identifier
+        # that conflicts with the inferred save owner makes ownership unknown.
+        if not ((owner_uid and primary_owner_uid and owner_uid == primary_owner_uid) or
+                (owner_username and primary_owner_username and owner_username.casefold() == primary_owner_username.casefold())):
+            continue
+        if owner_uid and owner_uid != primary_owner_uid:
+            continue
+        if owner_username and primary_owner_username and owner_username.casefold() != primary_owner_username.casefold():
+            continue
         decoded = decode_packed_galactic_address_signed(base.get("GalacticAddress"))
         if not decoded:
             continue
@@ -828,6 +842,7 @@ def extract_base_rows(data):
             "Base Position Coordinates": base_position_coordinates,
             "First Object Coordinates": first_object_coordinates,
             "Object Count": coords["object_count"],
+            "Base Parts": coords["object_count"],
             "Has Base Computer": "Yes" if coords["has_base_computer"] else "No",
             **portal_fields,
         }
@@ -914,6 +929,7 @@ def build_grouped_rows(rows):
             "Galaxy": row["Galaxy"],
             "Galaxy Number (Human)": row["Galaxy Number (Human)"],
             "Base Name": row["Base Name"],
+            "Base Parts": row["Base Parts"],
             "Base Type": row["Base Type"],
             "Teleporter Coordinates": row["Teleporter Coordinates"],
             "Computer Coordinates": row["Computer Coordinates"],
@@ -1047,6 +1063,7 @@ def split_valid_and_filtered_rows(rows):
 
 def write_summary(rows, summary_path: Path, filtered_rows=None):
     total_bases = len(rows)
+    total_parts = sum(row.get("Base Parts", 0) for row in rows)
     filtered_count = len(filtered_rows) if filtered_rows is not None else 0
     by_galaxy = Counter(
         (row["Galaxy Number (Save)"], row["Galaxy"], row["Galaxy Number (Human)"])
@@ -1073,6 +1090,7 @@ def write_summary(rows, summary_path: Path, filtered_rows=None):
         f.write("No Man's Sky Base Extraction Summary\n")
         f.write("=" * 40 + "\n\n")
         f.write(f"Total report rows: {total_bases}\n")
+        f.write(f"Total base parts: {total_parts}\n")
         f.write(f"Filtered-out rows: {filtered_count}\n")
         f.write(f"Rows with teleporter match: {teleporter_match_count}\n")
         f.write(f"Rows without teleporter match: {unmatched_count}\n")
@@ -1146,6 +1164,7 @@ def main():
     main_fieldnames = [
         "Teleporter Order",
         "Base Name",
+        "Base Parts",
         "Base Type",
         "Galaxy",
         "Galaxy Number (Human)",
@@ -1183,6 +1202,7 @@ def main():
         "Galaxy",
         "Galaxy Number (Human)",
         "Base Name",
+        "Base Parts",
         "Base Type",
         "Teleporter Coordinates",
         "Computer Coordinates",
@@ -1226,3 +1246,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

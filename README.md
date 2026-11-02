@@ -1,25 +1,19 @@
-# No-Man-s-Sky_Base-Reports
+# No Man's Sky Base Reports
 
-This Python script analyzes a No Man’s Sky save exported as JSON and generates reports for the player’s bases, including portal locations that make it easy to share a base with other players.
+A Python tool that turns an exported No Man's Sky save JSON into spreadsheet-friendly reports of your bases. Use it to count bases by galaxy, find base and teleporter coordinates, review saved timestamps, count parts, and copy portal addresses to share with other players.
+
+The script uses the player-facing persistent base list as its source, with teleporter records supplying extra information when matched. It filters bases by the configured owner's UID and username, excluding foreign, missing, or conflicting ownership. It reports planetary, orbital, space station, ship, and freighter base types without changing your save or input JSON.
 
 ## Reports
 
-Run `Generate Reports.bat` from the repository folder, or run the script directly:
+The master and grouped CSV files include a **Base Parts** count for each base. The summary includes the total number of reported bases and the combined **Total base parts**. Part counts come from each base's saved `Objects` entries, including the base computer when present; they may differ from the game's construction-limit accounting.
 
-```text
-python extract_nms_bases.py <path-to-exported-save.json>
-```
+**Requirements:** Python 3 and a full save JSON export with readable field names. No additional Python packages are required.
 
-The reports are written to the `nms_base_reports` folder by default. To choose another output folder, add `-o <folder>`.
+Place `save.hg.json` beside `extract_nms_bases.py` and `Generate Reports.bat`, then double-click the BAT file. It uses the `python` command and writes two CSV files and a text summary to `nms_base_reports`.
 
-- `nms_bases_master.csv` contains the detailed base list, including a **Base Parts** count for every base.
-- `nms_bases_grouped.csv` contains the grouped, easy-to-scan base list and the same **Base Parts** count.
-- `nms_bases_summary.txt` reports the number of bases and the combined **Total base parts**, along with the existing counts by base type and galaxy and other summary details.
+To run the script directly, use `python extract_nms_bases.py <path-to-exported-save.json>`. Add `-o <folder>` to choose a different output folder.
 
-Part counts are the number of object entries stored in each base’s `Objects` array. This count includes the base computer when it is present; it describes objects recorded in the save and may differ from the game’s construction-limit accounting.
+The script is configured for the player identity associated with this release. To use it for another player, update the configured owner UID and username in `extract_nms_bases.py`.
 
-## Ownership filtering
-
-The report uses the player-facing `BaseContext` persistent-base list. It includes a base only when the base record’s `Owner` identifies the configured player by UID or username. If both identifiers are present, both must agree. Bases with foreign, missing, or conflicting ownership information are excluded, so recently visited bases belonging to other players do not inflate the reports or part totals.
-
-The script is configured for the save owner used for this release. To use it for another player, update the configured owner UID and username in `extract_nms_bases.py` to match that player’s save.
+See the [User Guide](NMS_Base_Reports_User_Guide.md) for setup, report explanations, and troubleshooting.
