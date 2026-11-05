@@ -14,6 +14,10 @@ The reports include bases from the player-facing `BaseContext` list only when th
 
 Both CSV files include **Base Parts** for each reported base. The summary includes **Total base parts** across those bases. A part count is the number of entries in the saved `Objects` array, including the base computer when present. It may differ from the game's construction-limit accounting.
 
+## Biome Type
+
+Both CSV reports include **Biome Type** after **Base Type**. It comes from planet discovery records matched to the complete saved address, including the galaxy. Multiple distinct saved types are joined with ` or ` (for example, `Blue or Swamp`). Missing or unrecognized types are `Unknown`; nonplanetary bases are `Not applicable`. These are saved classifications and may reflect earlier game versions. Pet and egg data are not used.
+
 ## Table of Contents
 
 1. [What the Tool Does](#1-what-the-tool-does)

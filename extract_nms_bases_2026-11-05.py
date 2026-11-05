@@ -520,7 +520,7 @@ def iter_persistent_player_bases(data):
 
 def infer_primary_owner_uid(data):
     counts = Counter()
-    for _, base in iter_persistent_player_bases(data):
+    for _, _, base in iter_authoritative_persistent_bases(data):
         owner = base.get("Owner", {}) or {}
         uid = str(owner.get("UID", "")).strip()
         if uid:
@@ -533,7 +533,7 @@ def infer_primary_owner_uid(data):
 def infer_primary_owner_username(data):
     counts = Counter()
     primary_uid = infer_primary_owner_uid(data)
-    for _, base in iter_persistent_player_bases(data):
+    for _, _, base in iter_authoritative_persistent_bases(data):
         owner = base.get("Owner", {}) or {}
         if str(owner.get("UID", "")).strip() != primary_uid:
             continue
@@ -721,25 +721,85 @@ def teleporter_name_matches(persistent_name, candidate):
     )
 
 
+BIOME_TYPES = {
+    0: "Lush", 1: "Toxic", 2: "Scorched", 3: "Radioactive",
+    4: "Frozen", 5: "Barren", 6: "Dead", 7: "Weird",
+    8: "Red", 9: "Green", 10: "Blue", 12: "Swamp",
+    13: "Lava", 14: "Waterworld", 15: "GasGiant",
+}
+
+
+def parse_saved_integer(value):
+    """Normalize JSON integers and 0x-prefixed strings without losing bits."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value >= 0 else None
+    if isinstance(value, str):
+        try:
+            text = value.strip()
+            number = int(text, 16 if text.lower().startswith("0x") else 10)
+            return number if number >= 0 else None
+        except ValueError:
+            pass
+    return None
+
+
+def build_biome_lookup(data):
+    """Keep distinct planet discovery biomes at each complete universe address.
+
+    VP[1]'s low 16 bits hold the biome index; flags such as infestation
+    do not change the biome label. Pets and expedition settings are excluded.
+    """
+    lookup = defaultdict(set)
+    manager = data.get("DiscoveryManagerData") or {}
+    discovery = manager.get("DiscoveryData-v1") or {}
+    store = discovery.get("Store") or {}
+    for record in store.get("Record", []) or []:
+        if not isinstance(record, dict):
+            continue
+        details = record.get("DD") or {}
+        if not isinstance(details, dict) or details.get("DT") != "Planet":
+            continue
+        address = parse_saved_integer(details.get("UA"))
+        values = details.get("VP")
+        if address is None or not isinstance(values, list) or len(values) < 2:
+            continue
+        packed = parse_saved_integer(values[1])
+        biome = BIOME_TYPES.get(packed & 0xFFFF) if packed is not None else None
+        # Preserve an unknown classification alongside any known alternatives.
+        lookup[address].add(biome or "Unknown")
+    return lookup
+
+
+def base_biome_type(base, lookup):
+    if extract_raw_base_type(base) != "HomePlanetBase":
+        return "Not applicable"
+    values = lookup.get(parse_saved_integer(base.get("GalacticAddress")), set())
+    return " or ".join(sorted(values)) if values else "Unknown"
+
+
 def extract_base_rows(data):
     rows = []
     teleporter_lookup = build_teleporter_lookup(data)
-    # This save's player identity was verified against the uploaded NMSE export.
-    primary_owner_uid = "76561198051224284"
-    primary_owner_username = "ebaleytherogue"
+    biome_lookup = build_biome_lookup(data)
+    # Infer the dominant identity from the authoritative BaseContext records;
+    # never embed one player's UID or username in this public script.
+    primary_owner_uid = infer_primary_owner_uid(data)
+    primary_owner_username = infer_primary_owner_username(data)
 
     for context_key, teleporter_order, base in iter_authoritative_persistent_bases(data):
         owner = base.get("Owner") if isinstance(base.get("Owner"), dict) else {}
         owner_uid = str(owner.get("UID", "")).strip()
         owner_username = str(owner.get("USN", "")).strip()
-        # Unknown ownership is excluded. If both identifiers exist, both must
-        # agree with the save owner; at least one recognized identifier is required.
-        if not ((owner_uid and owner_uid == primary_owner_uid) or
-                (owner_username and owner_username.casefold() == primary_owner_username.casefold())):
+        # Require at least one known matching identifier. Any supplied identifier
+        # that conflicts with the inferred save owner makes ownership unknown.
+        if not ((owner_uid and primary_owner_uid and owner_uid == primary_owner_uid) or
+                (owner_username and primary_owner_username and owner_username.casefold() == primary_owner_username.casefold())):
             continue
         if owner_uid and owner_uid != primary_owner_uid:
             continue
-        if owner_username and owner_username.casefold() != primary_owner_username.casefold():
+        if owner_username and primary_owner_username and owner_username.casefold() != primary_owner_username.casefold():
             continue
         decoded = decode_packed_galactic_address_signed(base.get("GalacticAddress"))
         if not decoded:
@@ -807,6 +867,7 @@ def extract_base_rows(data):
             "Teleporter Order": teleporter_order,
             "Base Name": persistent_name,
             "Base Type": friendly_base_type(raw_base_type),
+            "Biome Type": base_biome_type(base, biome_lookup),
             "Base Type (Raw)": raw_base_type,
             "Galaxy": galaxy_name_from_save_index(reality_index),
             "Galaxy Number (Save)": reality_index,
@@ -930,6 +991,7 @@ def build_grouped_rows(rows):
             "Base Name": row["Base Name"],
             "Base Parts": row["Base Parts"],
             "Base Type": row["Base Type"],
+            "Biome Type": row["Biome Type"],
             "Teleporter Coordinates": row["Teleporter Coordinates"],
             "Computer Coordinates": row["Computer Coordinates"],
             "Planet": row["Planet"],
@@ -1165,6 +1227,7 @@ def main():
         "Base Name",
         "Base Parts",
         "Base Type",
+        "Biome Type",
         "Galaxy",
         "Galaxy Number (Human)",
         "Galaxy Number (Save)",
@@ -1203,6 +1266,7 @@ def main():
         "Base Name",
         "Base Parts",
         "Base Type",
+        "Biome Type",
         "Teleporter Coordinates",
         "Computer Coordinates",
         "Planet",
@@ -1245,3 +1309,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

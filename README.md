@@ -5,6 +5,8 @@ A Python tool that turns an exported No Man's Sky save JSON into spreadsheet-fri
 The script uses the player-facing persistent base list as its source, with teleporter records supplying extra information when matched. It filters bases by the configured owner's UID and username, excluding foreign, missing, or conflicting ownership. It reports planetary, orbital, space station, ship, and freighter base types without changing your save or input JSON.
 
 ## Reports
+Both CSV reports include **Biome Type** after **Base Type**. It comes from planet discovery records matched to the complete saved address, including the galaxy. Multiple distinct saved types are joined with ` or ` (for example, `Blue or Swamp`). Missing or unrecognized types are `Unknown`; nonplanetary bases are `Not applicable`. These are saved classifications and may reflect earlier game versions. Pet and egg data are not used.
+
 
 The master and grouped CSV files include a **Base Parts** count for each base. The summary includes the total number of reported bases and the combined **Total base parts**. Part counts come from each base's saved `Objects` entries, including the base computer when present; they may differ from the game's construction-limit accounting.
 
