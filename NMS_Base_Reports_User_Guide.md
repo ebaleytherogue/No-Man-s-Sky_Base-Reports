@@ -8,15 +8,15 @@
 - `extract_nms_bases.py`
 - `Generate Reports.bat`
 
-## Current version: ownership and part counts
+## Current version: Markdown summary and galaxy inference
 
 The reports include bases from the player-facing `BaseContext` list only when the record's `Owner` matches the player configured in the script. Foreign, missing, and conflicting ownership records are excluded. The script currently targets the owner configured for this release; change the owner UID and username constants in `extract_nms_bases.py` before using it with a different player.
 
-Both CSV files include **Base Parts** for each reported base. The summary includes **Total base parts** across those bases. A part count is the number of entries in the saved `Objects` array, including the base computer when present. It may differ from the game's construction-limit accounting.
+The master CSV includes **Base Parts** for each reported base. The summary includes **Total base parts** across those bases. A part count is the number of entries in the saved `Objects` array, including the base computer when present. It may differ from the game's construction-limit accounting.
 
 ## Biome Type
 
-Both CSV reports include **Biome Type** after **Base Type**. It comes from planet discovery records matched to the complete saved address, including the galaxy. Multiple distinct saved types are joined with ` or ` (for example, `Blue or Swamp`). Missing or unrecognized types are `Unknown`; nonplanetary bases are `Not applicable`. These are saved classifications and may reflect earlier game versions. Pet and egg data are not used.
+The master CSV report includes **Biome Type** after **Base Type**. It comes from planet discovery records matched to the complete saved address, including the galaxy. Multiple distinct saved types are joined with ` or ` (for example, `Blue or Swamp`). Missing or unrecognized types are `Unknown`; nonplanetary bases are `Not applicable`. These are saved classifications and may reflect earlier game versions. Pet and egg data are not used.
 
 ## Table of Contents
 
@@ -40,7 +40,7 @@ The script:
 - Uses `BaseContext.PlayerStateData.PersistentPlayerBases` as the source of the base list.
 - Supplements those records with matching teleporter information when available.
 - Reports base names, types, galaxies, portal addresses, coordinates, and saved timestamps.
-- Creates two CSV reports and a text summary, including counts by galaxy and base type.
+- Creates a master CSV and a Markdown summary, including counts by galaxy and base type.
 - Leaves your save and input JSON untouched.
 
 This tool produces reports. Changing a CSV does not change your bases or their order in the game's Terminus list.
@@ -82,7 +82,7 @@ C:\apps\NMS Base Reports\
 
 Rename your exported JSON to `save.hg.json` when using the BAT. Make sure File Explorer shows filename extensions so you do not accidentally create `save.hg.json.json`.
 
-The repository also includes `extract_nms_bases_2026-09-18.py`. Use the undated `extract_nms_bases.py` for normal operation; that is the file the BAT launches.
+The repository also includes `extract_nms_bases_2026-11-05.py`. Use the undated `extract_nms_bases.py` for normal operation; that is the file the BAT launches.
 
 ---
 
@@ -104,7 +104,7 @@ Run it from the folder containing the script and JSON. Its paths are relative to
 
 **Step 4 — Check the completion messages.**
 
-The script prints the paths of the master CSV, grouped CSV, and summary, followed by row counts. The BAT pauses so you can read the results or any error.
+The script prints the paths of the master CSV and Markdown summary, followed by row counts. The BAT pauses so you can read the results or any error.
 
 **Step 5 — Open `nms_base_reports`.**
 
@@ -113,8 +113,7 @@ The default output folder contains:
 ```text
 nms_base_reports\
     nms_bases_master.csv
-    nms_bases_grouped.csv
-    nms_bases_summary.txt
+    nms_bases_summary.md
 ```
 
 **Important:** Running again in the same output folder replaces these reports. Copy reports elsewhere first if you want to keep an older snapshot. The script also removes old `nms_bases_duplicate_names.csv` and `nms_bases_filtered_out.csv` files from the selected output folder; those reports are no longer generated.
@@ -150,12 +149,11 @@ Substitute `py` for `python` if needed. Use `--help` to display the available co
 | File | Use it for |
 |---|---|
 | `nms_bases_master.csv` | Detailed base information, addresses, coordinates, timestamps, and diagnostic notes. |
-| `nms_bases_grouped.csv` | The same base rows with galaxy and frequently useful fields placed near the front. |
-| `nms_bases_summary.txt` | Total rows, counts by galaxy and base type, teleporter matches, and other checks. |
+| `nms_bases_summary.md` | Overview, metrics, network themes, largest builds, data coverage, complete galaxy appendix, and final Items to Review. |
 
-Open the CSV files in Excel or LibreOffice Calc, or upload them to Google Drive and open them with Google Sheets. You can then filter and sort them like any other spreadsheet.
+Open the master CSV in Excel or LibreOffice Calc, or upload it to Google Drive and open it with Google Sheets. You can then filter and sort it like any other spreadsheet.
 
-Both CSVs are sorted by galaxy, system coordinates, system index, base name, and planet. The grouped file does not combine several bases into one row.
+The master CSV is sorted by galaxy, system coordinates, system index, base name, and planet.
 
 To examine the original saved base-list sequence, sort **Teleporter Order** numerically from smallest to largest. This is the one-based position in the source array before report sorting and filtering; gaps can occur.
 
@@ -211,7 +209,7 @@ Check that all three working files are together and that the JSON is named exact
 
 ### A JSON parsing error appears
 
-Export the full save again. The script attempts to repair certain invalid backslashes in memory, but it cannot repair every malformed export. Look for the three completion messages before assuming the reports finished successfully.
+Export the full save again. The script attempts to repair certain invalid backslashes in memory, but it cannot repair every malformed export. Look for both report completion messages before assuming the reports finished successfully.
 
 ### The report is empty or has fewer bases than expected
 
@@ -234,7 +232,18 @@ Those fields depend on information present in the export. A space base may not c
 3. Place it beside the script as `save.hg.json`.
 4. Preserve any earlier reports you want to keep.
 5. Run `Generate Reports.bat` and check the completion messages.
-6. Read the summary, then open a CSV to filter or sort your bases.
+6. Read the summary, then open the master CSV to filter or sort your bases.
 7. Share the galaxy and portal address together when giving someone a base location.
 
-**End of User Guide**
+
+## Report layout and inferred galaxies
+
+Normal runs generate only `nms_bases_master.csv` and `nms_bases_summary.md`. The grouped CSV is retired. Existing grouped CSV and text-summary snapshots are left untouched; they are no longer refreshed.
+
+In the master CSV, `Glyph String (No Spaces)` and `Glyph Names` immediately follow `Galaxy Number (Human)`, followed by `Galaxy Number (Save)`. `Teleporter Order` immediately follows `Teleporter Coordinates`. All other master fields are retained.
+
+When no galaxy number can be identified from extracted metadata, a base name beginning with `GXXX-` supplies the human galaxy number, provided XXX is exactly three digits from 001 through 256. The save number is the human number minus one, and the galaxy name comes from the script's mapping. Identified galaxies are never overwritten. `Notes` records `Galaxy inferred from base-name prefix`; names without a valid prefix remain unidentified. Inference does not manufacture a teleporter match or change biome classifications.
+
+The Markdown summary includes inferred and unresolved record counts, compact galaxy and base-type tables, the eight largest builds, and data coverage checks. Its Complete Galaxy Table appendix lists all represented galaxies with human galaxy numbers and record counts; Items to Review is the final section. Network themes are descriptive, not counted classifications. Missing extracted objects do not by themselves establish in-game damage.
+
+View the summary in a Markdown viewer. When using Google Docs, import or convert Markdown with heading and table support to retain its formatting.

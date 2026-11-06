@@ -3,6 +3,7 @@ import json
 import csv
 import argparse
 import math
+import re
 from datetime import datetime
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -932,11 +933,28 @@ def dedupe_exact_rows(rows):
     return deduped
 
 
+def infer_missing_galaxies(rows):
+    """Fill absent galaxy metadata from a valid GXXX- persistent base name."""
+    for row in rows:
+        if row.get("Galaxy Number (Human)") not in (None, ""):
+            continue
+        match = re.match(r"^G([0-9]{3})-", row.get("Base Name", ""))
+        if match and 1 <= int(match.group(1)) <= 256:
+            human = int(match.group(1))
+            row["Galaxy Number (Human)"] = human
+            row["Galaxy Number (Save)"] = human - 1
+            row["Galaxy"] = galaxy_name_from_save_index(human - 1)
+            row["Galaxy Inferred"] = True
+    return rows
+
+
 def annotate_notes(rows):
     name_counts = Counter(row["Base Name"] for row in rows if row["Base Name"])
 
     for row in rows:
         notes = []
+        if row.get("Galaxy Inferred"):
+            notes.append("Galaxy inferred from base-name prefix")
         if row["IsFavourite"]:
             notes.append("Favourite")
         if row["IsFeatured"]:
@@ -979,42 +997,6 @@ def write_csv(rows, output_path: Path, fieldnames):
         writer.writeheader()
         for row in rows:
             writer.writerow({k: row.get(k, "") for k in fieldnames})
-
-
-def build_grouped_rows(rows):
-    grouped = []
-    for row in rows:
-        grouped.append({
-            "Teleporter Order": row["Teleporter Order"],
-            "Galaxy": row["Galaxy"],
-            "Galaxy Number (Human)": row["Galaxy Number (Human)"],
-            "Base Name": row["Base Name"],
-            "Base Parts": row["Base Parts"],
-            "Base Type": row["Base Type"],
-            "Biome Type": row["Biome Type"],
-            "Teleporter Coordinates": row["Teleporter Coordinates"],
-            "Computer Coordinates": row["Computer Coordinates"],
-            "Planet": row["Planet"],
-            "Glyph Names": row["Glyph Names"],
-            "Galaxy Number (Save)": row["Galaxy Number (Save)"],
-            "Persistent Last Update Timestamp": row["Persistent Last Update Timestamp"],
-            "Persistent Last Update Timestamp Raw": row["Persistent Last Update Timestamp Raw"],
-            "Earliest Object Timestamp": row["Earliest Object Timestamp"],
-            "Earliest Object Timestamp Raw": row["Earliest Object Timestamp Raw"],
-            "Latest Object Timestamp": row["Latest Object Timestamp"],
-            "Latest Object Timestamp Raw": row["Latest Object Timestamp Raw"],
-            "Base Computer Timestamp": row["Base Computer Timestamp"],
-            "Base Computer Timestamp Raw": row["Base Computer Timestamp Raw"],
-            "Object Timestamp Count": row["Object Timestamp Count"],
-            "System (Coords)": row["System (Coords)"],
-            "Portal Hex (Grouped)": row["Portal Hex (Grouped)"],
-            "Glyph String (No Spaces)": row["Glyph String (No Spaces)"],
-            "Teleporter Base Name": row["Teleporter Base Name"],
-            "Persistent Base Name": row["Persistent Base Name"],
-            "Persistent Match": row["Persistent Match"],
-            "Notes": row["Notes"],
-        })
-    return grouped
 
 
 def build_duplicate_rows(rows):
@@ -1122,67 +1104,79 @@ def split_valid_and_filtered_rows(rows):
 
     return valid_rows, filtered_rows
 
+def markdown_cell(value):
+    return str(value).replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('|', '&#124;').replace('\r', ' ').replace('\n', ' ')
+
+
 def write_summary(rows, summary_path: Path, filtered_rows=None):
-    total_bases = len(rows)
-    total_parts = sum(row.get("Base Parts", 0) for row in rows)
-    filtered_count = len(filtered_rows) if filtered_rows is not None else 0
-    by_galaxy = Counter(
-        (row["Galaxy Number (Save)"], row["Galaxy"], row["Galaxy Number (Human)"])
-        for row in rows
-    )
-    by_name = Counter(row["Base Name"] for row in rows if row["Base Name"])
+    total = len(rows)
+    parts = [int(r.get('Base Parts', 0)) for r in rows]
+    known = [r for r in rows if r.get('Galaxy Number (Human)') not in (None, '')]
+    galaxies = Counter((r['Galaxy Number (Human)'], r['Galaxy'], r['Galaxy Number (Save)']) for r in known)
+    unknown = total - len(known)
+    inferred = sum(bool(r.get('Galaxy Inferred')) for r in rows)
+    matched = sum(bool(r.get('Teleporter Base Name')) for r in rows)
+    names = Counter(r['Base Name'] for r in rows if r['Base Name'])
+    biomes = Counter(r.get('Biome Type', 'Unknown') for r in rows)
+    lines = ["# No Man's Sky — Base Network Summary", '', '## Overview', '',
+             f'Your directory contains **{total:,} base and location records**, totaling **{sum(parts):,} base parts**.', '']
+    if known:
+        low, high = min(g[0] for g in galaxies), max(g[0] for g in galaxies)
+        lines += [f'Identified locations span **{len(galaxies)} galaxies**, from {markdown_cell(galaxy_name_from_save_index(low - 1))} (#{low}) to {markdown_cell(galaxy_name_from_save_index(high - 1))} (#{high}).', '']
 
-    repeated_name_count = sum(1 for _, count in by_name.items() if count > 1)
-    favourite_count = sum(1 for row in rows if row["IsFavourite"])
-    featured_count = sum(1 for row in rows if row["IsFeatured"])
-    base_type_counts = Counter(row["Base Type"] for row in rows)
-    planetary_planet_zero_count = sum(
-        1 for row in rows
-        if row["Planet"] == 0 and row.get("Base Type (Raw)") == "HomePlanetBase"
-    )
-    teleporter_match_count = sum(1 for row in rows if row["Teleporter Base Name"])
-    unmatched_count = total_bases - teleporter_match_count
-    planetary_no_computer_count = sum(
-        1 for row in rows
-        if not row["Computer Coordinates"] and row.get("Base Type (Raw)") == "HomePlanetBase"
-    )
+    def table(headers, records):
+        lines.append('| ' + ' | '.join(headers) + ' |')
+        lines.append('| ' + ' | '.join('---' for _ in headers) + ' |')
+        lines.extend('| ' + ' | '.join(markdown_cell(v) for v in record) + ' |' for record in records)
+        lines.append('')
 
-    with summary_path.open("w", encoding="utf-8") as f:
-        f.write("No Man's Sky Base Extraction Summary\n")
-        f.write("=" * 40 + "\n\n")
-        f.write(f"Total report rows: {total_bases}\n")
-        f.write(f"Total base parts: {total_parts}\n")
-        f.write(f"Filtered-out rows: {filtered_count}\n")
-        f.write(f"Rows with teleporter match: {teleporter_match_count}\n")
-        f.write(f"Rows without teleporter match: {unmatched_count}\n")
-        f.write(f"Bases marked Favourite: {favourite_count}\n")
-        f.write(f"Bases marked Featured: {featured_count}\n")
-        f.write(f"Distinct repeated base names: {repeated_name_count}\n")
-        f.write(f"Planetary bases with PlanetIndex 0: {planetary_planet_zero_count}\n")
-        f.write(f"Planetary bases without base computer object: {planetary_no_computer_count}\n\n")
+    lines += ['## At a Glance', '']
+    table(['Metric', 'Current total'], [
+        ('Directory records', f'{total:,}'), ('Total base parts', f'{sum(parts):,}'),
+        ('Identified galaxies', len(galaxies)), ('Galaxy assignments inferred from base names', inferred),
+        ('Records without an identified galaxy', unknown),
+        ('Smallest / largest recorded build', f'{min(parts)} / {max(parts)} parts' if parts else 'No records'),
+        ('Bases marked Favourite', sum(bool(r.get('IsFavourite')) for r in rows)),
+        ('Bases marked Featured', sum(bool(r.get('IsFeatured')) for r in rows))])
+    lines += ['## Base Network', '', '### Base Types', '']
+    table(['Type', 'Records'], list(sorted(Counter(r['Base Type'] for r in rows).items())) + [('Total', total)])
+    lines += ['### Galaxy Distribution', '']
+    top = sorted(galaxies.items(), key=lambda item: (-item[1], item[0][0]))[:5]
+    distribution = [(g[1] or 'Not identified', g[0], count) for g, count in top]
+    distribution += [('Other identified galaxies', '—', len(known) - sum(c for _, c in top)), ('Unidentified galaxy', '—', unknown), ('Total', '', total)]
+    table(['Galaxy', 'Number', 'Records'], distribution)
+    lines += ['### Network Themes', '',
+        'Base names may indicate recurring uses; these themes can overlap and are not a counted classification.', '',
+        '- **Travel and footholds:** portal access, core routes, and galaxy progression.',
+        '- **Resources and farming:** mineral refineries, crop farms, and recycling centers.',
+        '- **Exploration:** Autophage sites, crashed ships, unusual planets, and conjoined worlds.',
+        '- **Creative destinations:** orbital outposts, underwater bases, retreats, and themed landmarks.', '',
+        '## Largest Recorded Builds', '']
+    table(['Base', 'Galaxy', 'Parts'], [(r['Base Name'], r['Galaxy'] or 'Not identified', r['Base Parts']) for r in sorted(rows, key=lambda r: int(r.get('Base Parts', 0)), reverse=True)[:8]])
+    lines += ['## Data Coverage and Extraction Findings', '', '### Location and Classification Coverage', '']
+    table(['Finding', 'Records'], [('Teleporter match found', matched), ('No teleporter match found', total - matched), ('Galaxy inferred from base-name prefix', inferred), ('Galaxy not identified', unknown), ('Biome classified as Unknown', biomes['Unknown']), ('Biome classified as Not applicable', biomes['Not applicable'])])
+    lines += ['Inferred galaxy assignments use a valid G001- through G256- prefix only when extracted galaxy metadata is missing. Existing identified galaxies are preserved. Notes distinguish inferred values; names without a valid prefix remain unidentified.', '', '### Additional Checks', '']
+    table(['Check', 'Records / groups'], [('Filtered-out rows', len(filtered_rows or [])), ('Distinct repeated base names', sum(c > 1 for c in names.values())), ('Planetary bases with PlanetIndex 0', sum(r.get('Planet') == 0 and r.get('Base Type (Raw)') == 'HomePlanetBase' for r in rows))])
+    repeated = [(name, count) for name, count in sorted(names.items()) if count > 1]
+    if repeated:
+        table(['Repeated base name', 'Records'], repeated)
+    lines += ['## About the Reports', '',
+        "The master CSV contains the detailed directory, navigation fields, timestamps, and extraction notes. Part counts reflect saved Objects entries and may differ from the game's construction-limit accounting.", '',
+        'This summary distinguishes recorded values from interpretations based on base names. Extraction findings describe what the reporting process found; they are not automatic diagnoses of in-game problems.', '',
+        '## Appendix: Complete Galaxy Table', '',
+        'All galaxies represented in this report are listed below. Human galaxy numbering starts at 1. Inferred assignments are included in the record totals.', '']
+    complete = [(g[1] or 'Not identified', g[0], count) for g, count in sorted(galaxies.items())]
+    if unknown:
+        complete.append(('Unidentified galaxy', '', unknown))
+    table(['Galaxy', 'Human number', 'Records'], complete + [('Total', '', total)])
+    lines += ['## Items to Review', '']
+    table(['Extraction finding', 'Records', 'Interpretation'], [
+        ('No base computer object found', sum('No base computer object found' in r.get('Notes', '') for r in rows), 'The extraction did not locate a base computer object.'),
+        ('Teleporter and persistent names differ', sum('Teleporter name differed from persistent base name' in r.get('Notes', '') for r in rows), 'The two sources provide different names for the record.'),
+        ('Multiple teleporter candidates', sum(r.get('Teleporter Candidate Count', 0) > 1 for r in rows), 'More than one candidate was reported during matching.')])
+    lines += ['A record can appear in more than one finding.', '']
+    summary_path.write_text('\n'.join(lines), encoding='utf-8')
 
-        f.write("Counts by base type:\n")
-        for base_type, count in sorted(base_type_counts.items()):
-            f.write(f"  {base_type}: {count}\n")
-        f.write("\n")
-
-        f.write("Counts by galaxy:\n")
-        for save_num, galaxy_name, human_num in sorted(
-            by_galaxy.keys(),
-            key=lambda x: x[0] if x[0] not in ("", None) else 999999
-        ):
-            count = by_galaxy[(save_num, galaxy_name, human_num)]
-            display_name = galaxy_name if galaxy_name else f"Unknown Galaxy"
-            f.write(f"  {display_name} | Human {human_num} | Save {save_num}: {count}\n")
-
-        f.write("\nRepeated base names:\n")
-        any_repeats = False
-        for base_name, count in sorted(by_name.items(), key=lambda kv: (-kv[1], kv[0].lower())):
-            if count > 1:
-                any_repeats = True
-                f.write(f"  {base_name}: {count}\n")
-        if not any_repeats:
-            f.write("  None\n")
 
 
 def main():
@@ -1203,8 +1197,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     main_csv = output_dir / "nms_bases_master.csv"
-    grouped_csv = output_dir / "nms_bases_grouped.csv"
-    summary_txt = output_dir / "nms_bases_summary.txt"
+    summary_md = output_dir / "nms_bases_summary.md"
 
     # These reports are no longer useful in normal operation. Remove stale
     # copies from the selected output directory as well as ceasing generation.
@@ -1217,19 +1210,21 @@ def main():
 
     rows = extract_base_rows(data)
     rows = dedupe_exact_rows(rows)
+    rows = infer_missing_galaxies(rows)
     rows = annotate_notes(rows)
     rows, filtered_rows = split_valid_and_filtered_rows(rows)
     rows = sort_rows(rows)
     filtered_rows = sort_rows(filtered_rows)
 
     main_fieldnames = [
-        "Teleporter Order",
         "Base Name",
         "Base Parts",
         "Base Type",
         "Biome Type",
         "Galaxy",
         "Galaxy Number (Human)",
+        "Glyph String (No Spaces)",
+        "Glyph Names",
         "Galaxy Number (Save)",
         "VoxelX",
         "VoxelY",
@@ -1238,10 +1233,9 @@ def main():
         "Planet",
         "Computer Coordinates",
         "Teleporter Coordinates",
+        "Teleporter Order",
         "System (Coords)",
         "Portal Hex (Grouped)",
-        "Glyph String (No Spaces)",
-        "Glyph Names",
         "Teleporter Base Name",
         "Persistent Base Name",
         "Persistent Last Update Timestamp",
@@ -1258,41 +1252,7 @@ def main():
     ]
     write_csv(rows, main_csv, main_fieldnames)
 
-    grouped_rows = build_grouped_rows(rows)
-    grouped_fieldnames = [
-        "Teleporter Order",
-        "Galaxy",
-        "Galaxy Number (Human)",
-        "Base Name",
-        "Base Parts",
-        "Base Type",
-        "Biome Type",
-        "Teleporter Coordinates",
-        "Computer Coordinates",
-        "Planet",
-        "Glyph Names",
-        "Galaxy Number (Save)",
-        "Persistent Last Update Timestamp",
-        "Persistent Last Update Timestamp Raw",
-        "Earliest Object Timestamp",
-        "Earliest Object Timestamp Raw",
-        "Latest Object Timestamp",
-        "Latest Object Timestamp Raw",
-        "Base Computer Timestamp",
-        "Base Computer Timestamp Raw",
-        "Object Timestamp Count",
-        "System (Coords)",
-        "Teleporter Coordinates",
-        "Portal Hex (Grouped)",
-        "Glyph String (No Spaces)",
-        "Teleporter Base Name",
-        "Persistent Base Name",
-        "Persistent Match",
-        "Notes",
-    ]
-    write_csv(grouped_rows, grouped_csv, grouped_fieldnames)
-
-    write_summary(rows, summary_txt, filtered_rows)
+    write_summary(rows, summary_md, filtered_rows)
 
     repeated_groups = sum(
         1 for count in Counter(row["Base Name"] for row in rows if row["Base Name"]).values()
@@ -1300,8 +1260,7 @@ def main():
     )
 
     print(f"Master CSV written:       {main_csv.resolve()}")
-    print(f"Grouped CSV written:      {grouped_csv.resolve()}")
-    print(f"Summary written:          {summary_txt.resolve()}")
+    print(f"Summary written:          {summary_md.resolve()}")
     print(f"\nTotal report rows: {len(rows)}")
     print(f"Filtered-out rows: {len(filtered_rows)}")
     print(f"Repeated base-name groups: {repeated_groups}")
