@@ -1,0 +1,15 @@
+{
+  "BaseContext": {
+    "PlayerStateData": {
+      "PersistentPlayerBases": [
+        {
+          "Name": "G001-Synthetic Outpost",
+          "Owner": {"UID": "synthetic-owner", "USN": "Synthetic Explorer"},
+          "GalacticAddress": 4503723325968383,
+          "BaseType": {"PersistentBaseTypes": "HomePlanetBase"},
+          "Objects": []
+        }
+      ]
+    }
+  }
+}

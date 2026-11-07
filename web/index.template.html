@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>No Man’s Sky Base Reports Offline v1.0</title>
+<style>
+body { margin: 8vh auto; padding: 0 1.5rem; max-width: 42rem; background: #101827; color: #e2e8f0; font: 1rem/1.6 system-ui; }
+input, button, a { display: block; margin: .75rem 0; } button { font: inherit; padding: .5rem 1rem; } a { color: #a8dbff; }
+</style>
+<h1>No Man’s Sky Base Reports Offline v1.0</h1>
+<p>Select a full save exported as readable JSON. The bundled Python runtime processes the save on this device.</p>
+<form>
+<label for="save">Exported save JSON</label>
+<input id="save" type="file" accept=".json,application/json" required>
+<button>Generate reports</button>
+</form>
+<p id="progress" role="status"></p>
+<div id="downloads"></div>
+<script id="worker" type="text/plain">
+
+self.onmessage = async ({data: {file, python, names, indexURL}}) => {
+  try {
+    importScripts(indexURL + 'pyodide.js');
+    const py = await loadPyodide({indexURL});
+    self.postMessage({progress: 'Processing the save…'});
+    py.FS.writeFile('/extract.py', Uint8Array.from(atob(python), c => c.charCodeAt(0)));
+    py.FS.writeFile('/save.json', new Uint8Array(await file.arrayBuffer()), {canOwn: true});
+    py.runPython("import runpy, sys\nsys.argv = ['/extract.py', '/save.json', '-o', '/reports']\nrunpy.run_path('/extract.py', run_name='__main__')\n");
+    const reports = names.map(name => ({name, bytes: py.FS.readFile('/reports/' + name)}));
+    self.postMessage({reports}, reports.map(report => report.bytes.buffer));
+  } catch (error) {
+    self.postMessage({error: String(error.message || error).split('\n').filter(Boolean).pop()});
+  }
+};
+</script>
+<script>
+const reportNames = ['nms_bases_master.csv', 'nms_bases_summary.md'];
+const save = document.querySelector('#save');
+const button = document.querySelector('button');
+const progress = document.querySelector('#progress');
+const downloads = document.querySelector('#downloads');
+
+function run(file) {
+  const code = document.querySelector('#worker').textContent;
+  const url = URL.createObjectURL(new Blob([code], {type: 'text/javascript'}));
+  return new Promise((resolve, reject) => {
+    let worker;
+    const startupTimer = setTimeout(() => {
+      finish();
+      reject(new Error('Python did not start within 60 seconds. Close the app and reopen it using Start Base Reports.cmd.'));
+    }, 60000);
+    const finish = () => {
+      clearTimeout(startupTimer);
+      worker?.terminate();
+      URL.revokeObjectURL(url);
+    };
+    try {
+      worker = new Worker(url);
+      worker.onmessage = ({data}) => {
+        if (data.progress) {
+          clearTimeout(startupTimer);
+          progress.textContent = data.progress;
+          return;
+        }
+        finish();
+        if (data.error) reject(new Error(data.error));
+        else resolve(data.reports);
+      };
+      worker.onerror = event => {
+        finish();
+        reject(new Error(event.message || 'Python could not start.'));
+      };
+      worker.postMessage({file, indexURL: new URL('/runtime/', location.href).href, python: '__EXTRACTOR_BASE64__', names: reportNames});
+    } catch (error) {
+      finish();
+      reject(error);
+    }
+  });
+}
+
+document.querySelector('form').onsubmit = async event => {
+  event.preventDefault();
+  const file = save.files[0];
+  save.disabled = button.disabled = true;
+  for (const link of downloads.querySelectorAll('a')) URL.revokeObjectURL(link.href);
+  downloads.replaceChildren();
+  progress.textContent = 'Loading Python…';
+  const start = performance.now();
+  try {
+    for (const report of await run(file)) {
+      const link = document.createElement('a');
+      link.download = report.name;
+      link.href = URL.createObjectURL(new Blob([report.bytes]));
+      link.textContent = report.name;
+      downloads.append(link);
+    }
+    progress.textContent = 'Reports ready in ' + ((performance.now() - start) / 1000).toFixed(1) + ' seconds.';
+  } catch (error) {
+    progress.textContent = 'Could not generate reports. ' + error.message;
+  } finally {
+    save.disabled = button.disabled = false;
+  }
+};
+</script>
+</html>
+
+
+
+
+
+
+
+
