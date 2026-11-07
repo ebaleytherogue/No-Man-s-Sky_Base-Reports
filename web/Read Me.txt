@@ -1,0 +1,12 @@
+Base Reports Offline v1.0 for Windows
+
+1. Extract the entire ZIP to a folder.
+2. Double-click Start Base Reports.cmd. It opens Chrome when found, or your default browser.
+3. Select a full No Man's Sky save exported as readable JSON, then click Generate reports.
+4. Download the master CSV and Markdown summary. Close the launcher window when finished.
+
+No internet connection or separate Python installation is required.
+The launcher serves the bundled app only on this computer. The save is processed
+in the browser. Keep the files together and launch using the CMD file.
+
+Includes Pyodide 0.27.7. Its license is in the runtime folder.

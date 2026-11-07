@@ -10,6 +10,6 @@ $template.Replace('__EXTRACTOR_BASE64__', $source) |
 foreach ($file in 'pyodide.js', 'pyodide.asm.js', 'pyodide.asm.wasm', 'python_stdlib.zip', 'pyodide-lock.json', 'PYODIDE-LICENSE.txt') {
     Copy-Item -LiteralPath (Join-Path $RuntimeDirectory $file) -Destination (Join-Path $destination 'runtime')
 }
-foreach ($file in 'serve.ps1', 'Start Base Reports.cmd') {
+foreach ($file in 'serve.ps1', 'Start Base Reports.cmd', 'Read Me.txt') {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $file) -Destination $destination
 }
