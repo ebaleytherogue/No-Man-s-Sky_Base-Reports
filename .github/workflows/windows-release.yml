@@ -1,0 +1,75 @@
+name: Windows portable build
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+          architecture: x64
+
+      - name: Check synthetic save reports
+        shell: pwsh
+        run: |
+          python extract_nms_bases.py web/fixtures/synthetic-save.json -o build/report-check
+          if ($LASTEXITCODE -ne 0) { throw "Report generation failed." }
+
+          foreach ($name in 'nms_bases_master.csv', 'nms_bases_summary.md') {
+            $expected = [IO.File]::ReadAllText((Resolve-Path "web/fixtures/expected/$name").Path).Replace("`r`n", "`n")
+            $actual = [IO.File]::ReadAllText((Resolve-Path "build/report-check/$name").Path).Replace("`r`n", "`n")
+            if ($actual -cne $expected) { throw "Synthetic save report differs from expected output: $name" }
+            Write-Host "Matched $name"
+          }
+
+      - name: Build and zip the portable app
+        shell: pwsh
+        run: |
+          python -m pip install -r requirements-windows.txt
+          if ($LASTEXITCODE -ne 0) { throw "Dependency installation failed." }
+
+          ./build-windows.ps1
+          $bundle = 'dist/NMS Base Reports'
+          if (!(Test-Path -LiteralPath "$bundle/NMS Base Reports.exe" -PathType Leaf)) {
+            throw "The build did not produce NMS Base Reports.exe."
+          }
+          Compress-Archive -LiteralPath $bundle -DestinationPath 'dist/NMS-Base-Reports-Windows-x64-Portable.zip' -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NMS-Base-Reports-Windows-x64
+          path: dist/NMS-Base-Reports-Windows-x64-Portable.zip
+          if-no-files-found: error
+
+  attach-release:
+    if: github.event_name == 'release'
+    needs: build
+    runs-on: windows-2025
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: NMS-Base-Reports-Windows-x64
+
+      - name: Attach portable ZIP to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          gh release upload --repo "$env:GITHUB_REPOSITORY" -- "$env:RELEASE_TAG" NMS-Base-Reports-Windows-x64-Portable.zip
+          if ($LASTEXITCODE -ne 0) { throw "Release asset upload failed." }
