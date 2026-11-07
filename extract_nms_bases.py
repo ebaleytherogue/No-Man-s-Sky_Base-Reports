@@ -1179,21 +1179,8 @@ def write_summary(rows, summary_path: Path, filtered_rows=None):
 
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Extract an authoritative No Man's Sky base list from PersistentPlayerBases and generate reports, using teleporter data only as supplemental metadata when available."
-    )
-    parser.add_argument("input_json", help="Path to the exported save JSON file")
-    parser.add_argument(
-        "-o",
-        "--output-dir",
-        default="nms_base_reports",
-        help="Output directory (default: nms_base_reports)",
-    )
-    args = parser.parse_args()
-
-    input_path = Path(args.input_json)
-    output_dir = Path(args.output_dir)
+def generate_reports(input_path, output_dir, status=lambda message: None):
+    """Generate the same reports for the CLI and Windows application."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
     main_csv = output_dir / "nms_bases_master.csv"
@@ -1206,8 +1193,10 @@ def main():
         if obsolete_path.exists():
             obsolete_path.unlink()
 
+    status('Reading save JSON…')
     data = load_json_with_backslash_fix(input_path)
 
+    status('Processing base records…')
     rows = extract_base_rows(data)
     rows = dedupe_exact_rows(rows)
     rows = infer_missing_galaxies(rows)
@@ -1250,6 +1239,7 @@ def main():
         "Persistent Match",
         "Notes",
     ]
+    status('Writing reports…')
     write_csv(rows, main_csv, main_fieldnames)
 
     write_summary(rows, summary_md, filtered_rows)
@@ -1259,10 +1249,30 @@ def main():
         if count > 1
     )
 
+    return main_csv, summary_md, len(rows), len(filtered_rows), repeated_groups
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Extract an authoritative No Man's Sky base list from PersistentPlayerBases and generate reports, using teleporter data only as supplemental metadata when available."
+    )
+    parser.add_argument("input_json", help="Path to the exported save JSON file")
+    parser.add_argument(
+        "-o",
+        "--output-dir",
+        default="nms_base_reports",
+        help="Output directory (default: nms_base_reports)",
+    )
+    args = parser.parse_args()
+
+    input_path = Path(args.input_json)
+    output_dir = Path(args.output_dir)
+    main_csv, summary_md, row_count, filtered_count, repeated_groups = generate_reports(input_path, output_dir)
+
     print(f"Master CSV written:       {main_csv.resolve()}")
     print(f"Summary written:          {summary_md.resolve()}")
-    print(f"\nTotal report rows: {len(rows)}")
-    print(f"Filtered-out rows: {len(filtered_rows)}")
+    print(f"\nTotal report rows: {row_count}")
+    print(f"Filtered-out rows: {filtered_count}")
     print(f"Repeated base-name groups: {repeated_groups}")
 
 
